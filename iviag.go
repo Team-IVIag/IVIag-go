@@ -85,12 +85,21 @@ func GetArchives(manga uint64) (mangas []Archive, err error) {
 		return
 	}
 	links := make([]Archive, 0)
-	doc.Find("#vContent div").First().Find("a").Each(func(i int, s *goquery.Selection) {
+	doc.Find("div .content").Children().Find("a").Each(func(i int, s *goquery.Selection) {
 		if l, ok := s.Attr("href"); ok && strings.Index(l, ArchivePrefix) != -1 {
 			if link, err := strconv.ParseUint(l[strings.Index(l, ArchivePrefix)+len(ArchivePrefix):], 10, 64); err == nil {
+				sub := s.Text()
+				if sub == "" {
+					for _, l := range links {
+						if l.ID == link {
+							return
+						}
+					}
+					sub = "Untitled"
+				}
 				links = append(links, Archive{
 					ID:      link,
-					Subject: s.Text(),
+					Subject: sub,
 				})
 			}
 		}
