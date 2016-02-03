@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -21,7 +22,14 @@ const (
 	UserAgent     = "Opera/12.02 (Android 4.1; Linux; Opera Mobi/ADR-1111101157; U; en-US) Presto/2.9.201 Version/12.02" // Opera Mobile 12.02
 )
 
-var workerID, fetchID uint32
+var (
+	workerID, fetchID uint32
+	Cookie            = &http.Cookie{
+		Name:  "sucuri_cloudproxy_uuid_0b08a99da",
+		Value: "90a09d699fc2833ec55cdb5a0bb7a794",
+	}
+	Filter = regexp.MustCompile("[\\[\\]\\:\\s<>\\=\\|\\+]").ReplaceAllString
+)
 
 func main() {
 	maxPics := flag.Int64("max", -1, "다운로드할 최대 이미지 수")
@@ -114,17 +122,29 @@ func GetArchives(manga uint64) (mangas []Archive, err error) {
 }
 
 func GetPics(archive uint64) (urls []string, err error) {
-	fmt.Println(Get(ArchivePrefix + strconv.FormatUint(archive, 10)))
+	req, err := http.NewRequest("GET", ArchivePrefix+strconv.FormatUint(archive, 10), nil)
+	if err != nil {
+		return nil, fmt.Errorf("Request creation error: %s", err.Error())
+	}
+	req.Header.Set("User-Agent", UserAgent)
+	req.AddCookie(Cookie)
+	resp, err := new(http.Client).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request error: %s", err.Error())
+	}
+	defer resp.Body.Close()
 	var doc *goquery.Document
-	doc, err = goquery.NewDocument(ArchivePrefix + strconv.FormatUint(archive, 10))
+	doc, err = goquery.NewDocumentFromResponse(resp)
 	if err != nil {
 		return
 	}
+	urls = make([]string, 0)
 	doc.Find("div .entry-content").Find("p").Contents().Each(func(i int, s *goquery.Selection) {
-		fmt.Println(s.Nodes[0])
+		if img, ok := s.Attr("data-lazy-src"); ok {
+			urls = append(urls, img)
+		}
 	})
-	fmt.Println("parse done")
-	return nil, nil
+	return
 }
 
 type Downloader struct {
@@ -191,15 +211,30 @@ func NewWorker(fetchers uint64, tc <-chan Archive, rc chan<- Status) *Worker {
 		go w.Fetchers[i].fetch()
 	}
 	go w.Watch()
+	go func() {
+		for result := range w.FResult {
+			if !result.Ok {
+				log.Printf("Fetch error: %s", result.Description)
+			}
+		}
+	}()
 	return w
 }
 
 func (w Worker) Watch() {
 	for target := range w.Targets {
+		os.MkdirAll(Filter(target.Subject, "_"), os.ModeDir)
 		log.Printf("Parsing archive: %s%d", ArchivePrefix, target.ID)
-		_, err := GetPics(target.ID)
+		imgs, err := GetPics(target.ID)
 		if err != nil {
 			log.Printf("Archive parse error: %s", err.Error())
+		}
+		log.Printf("Archive parse done for: %s%d", ArchivePrefix, target.ID)
+		for i, img := range imgs {
+			w.FRequest <- FetchRequest{
+				URL:     img,
+				FileDir: Filter(target.Subject+"/"+strconv.Itoa(i)+".jpg", "_"),
+			}
 		}
 	}
 }
@@ -216,8 +251,9 @@ type Fetcher struct {
 
 func (f Fetcher) fetch() {
 	for req := range f.Request {
+		log.Printf("Fetch start: %s -> %s", req.URL, req.FileDir)
 		func(req FetchRequest) {
-			file, err := os.Create(req.filedir)
+			file, err := os.Create(req.FileDir)
 			if err != nil {
 				f.Result <- FetchResult{
 					Ok:          false,
@@ -234,10 +270,13 @@ func (f Fetcher) fetch() {
 				}
 			}
 			n, err := file.WriteString(s)
-			f.Result <- FetchResult{
-				Ok:          true,
-				Description: strconv.FormatInt(int64(n), 10) + " bytes were written",
-			}
+			/*
+				            f.Result <- FetchResult{
+								Ok:          true,
+								Description: strconv.FormatInt(int64(n), 10) + " bytes were written",
+							}
+			*/
+			log.Printf("Fetch to %s succeeded: %d bytes were written", req.FileDir, n)
 		}(req)
 	}
 }
@@ -262,7 +301,7 @@ type Status struct {
 
 type FetchRequest struct {
 	URL     string
-	filedir string
+	FileDir string
 }
 
 type FetchResult struct {
