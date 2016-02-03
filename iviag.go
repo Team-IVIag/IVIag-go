@@ -13,32 +13,33 @@ import (
 	"sync/atomic"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/davecgh/go-spew/spew"
 )
 
 const (
 	MangaPrefix   = "http://marumaru.in/b/manga/"
 	ArchivePrefix = "http://www.mangaumaru.com/archives/"
+	UserAgent     = "Opera/12.02 (Android 4.1; Linux; Opera Mobi/ADR-1111101157; U; en-US) Presto/2.9.201 Version/12.02" // Opera Mobile 12.02
 )
 
 var workerID, fetchID uint32
 
 func main() {
 	maxPics := flag.Int64("max", -1, "다운로드할 최대 이미지 수")
-	workers := flag.Uint64("worker", 5, "한 번에 동시에 다운로드할 만화 수")
-	fetchers := flag.Uint64("fetch", 1, "만화당 동시에 다운로드할 이미지 수")
+	downloaders := flag.Uint64("dl", 1, "한 번에 다운로드할 만화 수")
+	workers := flag.Uint64("worker", 5, "한 만화당 동시에 다운로드할 회차 수")
+	fetchers := flag.Uint64("fetch", 1, "회차당 동시에 다운로드할 이미지 수")
 	flag.Parse()
 	mangas := flag.Args()
 
 	log.Println(mangas, *maxPics, *workers, *fetchers)
 
-	targets := make([]uint64, len(mangas))
-	for i, manga := range mangas {
+	targets := make(chan uint64, len(mangas))
+	for _, manga := range mangas {
 		m, err := strconv.ParseUint(manga, 10, 64)
 		if err != nil {
 			log.Fatal(err)
 		}
-		targets[i] = m
+		targets <- m
 	}
 
 	if len(mangas) == 0 {
@@ -47,20 +48,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *fetchers == 0 || *workers == 0 || *maxPics == 0 {
+	if *fetchers == 0 || *workers == 0 || *maxPics == 0 || *downloaders == 0 {
 		fmt.Println("Invalid argument supplied")
 		os.Exit(1)
 	}
-
-	dl := new(Downloader)
-	dl.Init(*workers, *fetchers, *maxPics)
-	dl.Start(targets)
-
+	for i := uint64(0); i < *downloaders; i++ {
+		dl := new(Downloader)
+		dl.Init(*workers, *fetchers, *maxPics)
+		dl.Start(targets)
+	}
 	fmt.Scanln()
 }
 
 func Get(url string) (string, error) { // From http://stackoverflow.com/questions/11692860/how-can-i-efficiently-download-a-large-file-using-go
-	resp, err := http.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("Request creation error: %s", err.Error())
+	}
+	req.Header.Set("User-Agent", UserAgent)
+	resp, err := new(http.Client).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("HTTP request error: %s", err.Error())
 	}
@@ -107,7 +113,17 @@ func GetArchives(manga uint64) (mangas []Archive, err error) {
 	return links, nil
 }
 
-func GetPics(archive uint64) ([]string, error) {
+func GetPics(archive uint64) (urls []string, err error) {
+	fmt.Println(Get(ArchivePrefix + strconv.FormatUint(archive, 10)))
+	var doc *goquery.Document
+	doc, err = goquery.NewDocument(ArchivePrefix + strconv.FormatUint(archive, 10))
+	if err != nil {
+		return
+	}
+	doc.Find("div .entry-content").Find("p").Contents().Each(func(i int, s *goquery.Selection) {
+		fmt.Println(s.Nodes[0])
+	})
+	fmt.Println("parse done")
 	return nil, nil
 }
 
@@ -116,14 +132,14 @@ type Downloader struct {
 	workers  uint64
 	fetchers uint64
 	maxPics  int64
-	target   chan<- uint64
+	target   chan<- Archive
 	report   <-chan Status
 }
 
 func (d *Downloader) Init(workers, fetchers uint64, maxPics int64) {
 	d.workers, d.fetchers, d.maxPics = workers, fetchers, maxPics
 	d.Workers = make([]*Worker, workers)
-	tc, rc := make(chan uint64, 30), make(chan Status, 30)
+	tc, rc := make(chan Archive, 30), make(chan Status, 30)
 	for i := range d.Workers {
 		d.Workers[i] = NewWorker(fetchers, tc, rc)
 	}
@@ -136,23 +152,30 @@ func (d *Downloader) Init(workers, fetchers uint64, maxPics int64) {
 	}()
 }
 
-func (d *Downloader) Start(mangas []uint64) {
-	for _, manga := range mangas {
-		d.target <- manga
-		spew.Dump(GetArchives(manga))
+func (d *Downloader) Start(mangas <-chan uint64) {
+	for manga := range mangas {
+		log.Printf("Parsing archive list: %s%d", MangaPrefix, manga)
+		links, err := GetArchives(manga)
+		if err != nil {
+			log.Printf("Archive list parse error: %s", err.Error())
+			continue
+		}
+		for _, link := range links {
+			d.target <- link
+		}
 	}
 }
 
 type Worker struct {
 	ID       uint32
 	Fetchers []*Fetcher
-	Targets  <-chan uint64
+	Targets  <-chan Archive
 	Report   chan<- Status
 	FRequest chan FetchRequest
 	FResult  chan FetchResult
 }
 
-func NewWorker(fetchers uint64, tc <-chan uint64, rc chan<- Status) *Worker {
+func NewWorker(fetchers uint64, tc <-chan Archive, rc chan<- Status) *Worker {
 	w := new(Worker)
 	w.ID = atomic.AddUint32(&workerID, 1)
 	w.Targets, w.Report = tc, rc
@@ -173,13 +196,15 @@ func NewWorker(fetchers uint64, tc <-chan uint64, rc chan<- Status) *Worker {
 
 func (w Worker) Watch() {
 	for target := range w.Targets {
-		w.Download(target)
+		log.Printf("Parsing archive: %s%d", ArchivePrefix, target.ID)
+		_, err := GetPics(target.ID)
+		if err != nil {
+			log.Printf("Archive parse error: %s", err.Error())
+		}
 	}
 }
 
 func (w Worker) Download(manga uint64) { //TODO: Parse contents here and fetch them
-	url := fmt.Sprintf("%s%d", MangaPrefix, manga)
-	log.Print("Downloading: ", url)
 }
 
 type Fetcher struct {
