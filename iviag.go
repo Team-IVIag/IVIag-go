@@ -107,7 +107,7 @@ func GetArchives(manga uint64) (title string, mangas []Archive, err error) {
 		return
 	}
 	links := make([]Archive, 0)
-	var seq uint64
+	seq := uint64(1)
 	title = Filter(doc.Find("div .subject").Find("h1").Text(), "_")
 	if title == "" {
 		title = "Untitled"
