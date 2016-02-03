@@ -8,9 +8,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/PuerkitoBio/goquery"
@@ -58,12 +60,17 @@ func main() {
 		fmt.Println("Invalid argument supplied")
 		os.Exit(1)
 	}
+
+	wg := new(sync.WaitGroup)
+	wg.Add(int(*downloaders))
 	for i := uint64(0); i < *downloaders; i++ {
 		dl := new(Downloader)
 		dl.Init(*workers, *fetchers, *maxPics)
-		dl.Start(targets)
+		go dl.Start(targets, wg)
 	}
-	fmt.Scanln()
+	close(targets)
+	wg.Wait()
+	log.Print("All tasks were done.")
 }
 
 func Get(url string) (string, error) { // From http://stackoverflow.com/questions/11692860/how-can-i-efficiently-download-a-large-file-using-go
@@ -87,7 +94,9 @@ func Get(url string) (string, error) { // From http://stackoverflow.com/question
 
 type Archive struct {
 	ID      uint64
+	Seq     uint64
 	Subject string
+	Wait    *sync.WaitGroup
 }
 
 func GetArchives(manga uint64) (mangas []Archive, err error) {
@@ -97,6 +106,7 @@ func GetArchives(manga uint64) (mangas []Archive, err error) {
 		return
 	}
 	links := make([]Archive, 0)
+	var seq uint64
 	doc.Find("div .content").Children().Find("a").Each(func(i int, s *goquery.Selection) {
 		if l, ok := s.Attr("href"); ok && strings.Index(l, ArchivePrefix) != -1 {
 			if link, err := strconv.ParseUint(l[strings.Index(l, ArchivePrefix)+len(ArchivePrefix):], 10, 64); err == nil {
@@ -111,33 +121,38 @@ func GetArchives(manga uint64) (mangas []Archive, err error) {
 				}
 				links = append(links, Archive{
 					ID:      link,
+					Seq:     seq,
 					Subject: sub,
 				})
+				seq++
 			}
 		}
 	})
 	return links, nil
 }
 
-func GetPics(archive uint64) (urls []string, err error) {
+func GetPics(archive uint64) (rawhtml string, urls []string, err error) {
 	req, err := http.NewRequest("GET", ArchivePrefix+strconv.FormatUint(archive, 10), nil)
 	if err != nil {
-		return nil, fmt.Errorf("Request creation error: %s", err.Error())
+		return "", nil, fmt.Errorf("Request creation error: %s", err.Error())
 	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.AddCookie(Cookie)
 	resp, err := new(http.Client).Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP request error: %s", err.Error())
+		return "", nil, fmt.Errorf("HTTP request error: %s", err.Error())
 	}
 	defer resp.Body.Close()
+	buf := new(bytes.Buffer)
+	io.Copy(buf, resp.Body)
+	rawhtml = buf.String()
 	var doc *goquery.Document
-	doc, err = goquery.NewDocumentFromResponse(resp)
+	doc, err = goquery.NewDocumentFromReader(buf)
 	if err != nil {
 		return
 	}
 	urls = make([]string, 0)
-	doc.Find("div .entry-content").Find("p").Contents().Each(func(i int, s *goquery.Selection) {
+	doc.Find("div .entry-content").Find("img").Each(func(i int, s *goquery.Selection) {
 		if img, ok := s.Attr("data-lazy-src"); ok {
 			urls = append(urls, img)
 		}
@@ -147,6 +162,7 @@ func GetPics(archive uint64) (urls []string, err error) {
 
 type Downloader struct {
 	Workers  []*Worker
+	Wait     *sync.WaitGroup
 	workers  uint64
 	fetchers uint64
 	maxPics  int64
@@ -157,7 +173,8 @@ type Downloader struct {
 func (d *Downloader) Init(workers, fetchers uint64, maxPics int64) {
 	d.workers, d.fetchers, d.maxPics = workers, fetchers, maxPics
 	d.Workers = make([]*Worker, workers)
-	tc, rc := make(chan Archive, 30), make(chan Status, 30)
+	d.Wait = new(sync.WaitGroup)
+	tc, rc := make(chan Archive, 1), make(chan Status, 30)
 	for i := range d.Workers {
 		d.Workers[i] = NewWorker(fetchers, tc, rc)
 	}
@@ -170,7 +187,7 @@ func (d *Downloader) Init(workers, fetchers uint64, maxPics int64) {
 	}()
 }
 
-func (d *Downloader) Start(mangas <-chan uint64) {
+func (d *Downloader) Start(mangas <-chan uint64, wg *sync.WaitGroup) {
 	for manga := range mangas {
 		log.Printf("Parsing archive list: %s%d", MangaPrefix, manga)
 		links, err := GetArchives(manga)
@@ -178,10 +195,14 @@ func (d *Downloader) Start(mangas <-chan uint64) {
 			log.Printf("Archive list parse error: %s", err.Error())
 			continue
 		}
+		d.Wait.Add(len(links))
 		for _, link := range links {
+			link.Wait = d.Wait
 			d.target <- link
 		}
 	}
+	d.Wait.Wait()
+	wg.Done()
 }
 
 type Worker struct {
@@ -221,19 +242,38 @@ func NewWorker(fetchers uint64, tc <-chan Archive, rc chan<- Status) *Worker {
 
 func (w Worker) Watch() {
 	for target := range w.Targets {
-		os.MkdirAll(Filter(target.Subject, "_"), os.ModeDir)
+		dir := strconv.FormatUint(target.Seq, 10) + "_" + Filter(target.Subject, "_")
+		os.MkdirAll(dir, os.ModeDir)
 		log.Printf("Parsing archive: %s%d", ArchivePrefix, target.ID)
-		imgs, err := GetPics(target.ID)
+		raw, imgs, err := GetPics(target.ID)
 		if err != nil {
 			log.Printf("Archive parse error: %s", err.Error())
 		}
 		log.Printf("Archive parse done for: %s%d", ArchivePrefix, target.ID)
+		func() {
+			file, err := os.Create(dir + "/raw.html")
+			if err == nil {
+				defer file.Close()
+			}
+			file.WriteString(raw)
+		}()
+		wg := new(sync.WaitGroup)
+		wg.Add(len(imgs))
 		for i, img := range imgs {
 			w.FRequest <- FetchRequest{
 				URL:     img,
-				FileDir: Filter(target.Subject+"/"+strconv.Itoa(i)+".jpg", "_"),
+				FileDir: strconv.FormatUint(target.Seq, 10) + "_" + Filter(target.Subject+"/"+strconv.Itoa(i)+".jpg", "_"),
+				Wait:    wg,
 			}
 		}
+		log.Printf("Archive fetch request for %d(%s) sent. Waiting now.", target.ID, target.Subject)
+		wg.Wait()
+		files, err := filepath.Glob(dir + "/*.jpg")
+		if err != nil {
+			files = make([]string, 0)
+		}
+		log.Printf("Archive fetch complete for %d(%s). Pics count: %d", target.ID, target.Subject, len(files))
+		target.Wait.Done()
 	}
 }
 
@@ -249,8 +289,9 @@ type Fetcher struct {
 
 func (f Fetcher) fetch() {
 	for req := range f.Request {
-		log.Printf("Fetch start: %s -> %s", req.URL, req.FileDir)
+		// log.Printf("Fetch start: %s -> %s", req.URL, req.FileDir)
 		func(req FetchRequest) {
+			defer req.Wait.Done()
 			file, err := os.Create(req.FileDir)
 			if err != nil {
 				f.Result <- FetchResult{
@@ -267,14 +308,14 @@ func (f Fetcher) fetch() {
 					Description: err.Error(),
 				}
 			}
-			n, err := file.WriteString(s)
+			_, err = file.WriteString(s)
 			/*
 				            f.Result <- FetchResult{
 								Ok:          true,
 								Description: strconv.FormatInt(int64(n), 10) + " bytes were written",
 							}
 			*/
-			log.Printf("Fetch to %s succeeded: %d bytes were written", req.FileDir, n)
+			// log.Printf("Fetch to %s succeeded: %d bytes were written", req.FileDir, n)
 		}(req)
 	}
 }
@@ -300,6 +341,7 @@ type Status struct {
 type FetchRequest struct {
 	URL     string
 	FileDir string
+	Wait    *sync.WaitGroup
 }
 
 type FetchResult struct {
