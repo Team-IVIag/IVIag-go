@@ -28,7 +28,7 @@ var (
 	workerID, fetchID uint32
 	Cookie            = &http.Cookie{
 		Name:  "sucuri_cloudproxy_uuid_0b08a99da",
-		Value: "90a09d699fc2833ec55cdb5a0bb7a794",
+		Value: "7c3e7edb2923fae1d03dc56ba296f6da",
 	}
 	Filter = regexp.MustCompile("[\\[\\]\\:\\s<>\\=\\|\\+]").ReplaceAllString
 )
@@ -108,7 +108,7 @@ func GetArchives(manga uint64) (title string, mangas []Archive, err error) {
 	}
 	links := make([]Archive, 0)
 	var seq uint64
-	title = Filter(doc.Find("div .subject").Find("h").First().Text(), "_")
+	title = Filter(doc.Find("div .subject").Find("h1").Text(), "_")
 	if title == "" {
 		title = "Untitled"
 	}
@@ -279,8 +279,8 @@ func (w Worker) Watch() {
 		if err != nil {
 			files = make([]string, 0)
 		}
-		log.Printf("Archive fetch complete for %d(%s). Pics count: %d", target.ID, target.Subject, len(files))
 		target.Wait.Done()
+		log.Printf("Archive fetch complete for %d(%s). Pics count: %d", target.ID, target.Subject, len(files))
 	}
 }
 
