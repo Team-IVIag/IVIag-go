@@ -34,12 +34,10 @@ var (
 func main() {
 	maxPics := flag.Int64("max", -1, "다운로드할 최대 이미지 수")
 	downloaders := flag.Uint64("dl", 1, "한 번에 다운로드할 만화 수")
-	workers := flag.Uint64("worker", 5, "한 만화당 동시에 다운로드할 회차 수")
-	fetchers := flag.Uint64("fetch", 1, "회차당 동시에 다운로드할 이미지 수")
+	workers := flag.Uint64("worker", 3, "한 만화당 동시에 다운로드할 회차 수")
+	fetchers := flag.Uint64("fetch", 3, "회차당 동시에 다운로드할 이미지 수")
 	flag.Parse()
 	mangas := flag.Args()
-
-	log.Println(mangas, *maxPics, *workers, *fetchers)
 
 	targets := make(chan uint64, len(mangas))
 	for _, manga := range mangas {
