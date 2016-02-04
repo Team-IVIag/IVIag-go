@@ -14,8 +14,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/organization/cloudflare-bypass"
 )
 
 const (
@@ -28,7 +30,7 @@ var (
 	workerID, fetchID uint32
 	Cookie            = &http.Cookie{
 		Name:  "sucuri_cloudproxy_uuid_0b08a99da",
-		Value: "7c3e7edb2923fae1d03dc56ba296f6da",
+		Value: "",
 	}
 	Filter = regexp.MustCompile("[\\[\\]\\:\\s<>\\=\\|\\+]").ReplaceAllString
 )
@@ -60,7 +62,10 @@ func main() {
 		fmt.Println("Invalid argument supplied")
 		os.Exit(1)
 	}
-
+	doc, err := goquery.NewDocument(MangaPrefix)
+	if err == nil && doc.Find("title").First().Text()[:7] == "You are" {
+		UpdateCookie(doc)
+	}
 	wg := new(sync.WaitGroup)
 	wg.Add(int(*downloaders))
 	for i := uint64(0); i < *downloaders; i++ {
@@ -104,6 +109,10 @@ func GetArchives(manga uint64) (title string, mangas []Archive, err error) {
 	var doc *goquery.Document
 	doc, err = goquery.NewDocument(MangaPrefix + strconv.FormatUint(manga, 10))
 	if err != nil {
+		return
+	}
+	if doc.Find("title").First().Text()[:7] == "You are" {
+		UpdateCookie(doc)
 		return
 	}
 	links := make([]Archive, 0)
@@ -157,6 +166,10 @@ func GetPics(archive uint64) (rawhtml string, urls []string, err error) {
 	if err != nil {
 		return
 	}
+	if doc.Find("title").First().Text()[:7] == "You are" {
+		UpdateCookie(doc)
+		return
+	}
 	urls = make([]string, 0)
 	doc.Find("div .entry-content").Find("img").Each(func(i int, s *goquery.Selection) {
 		if img, ok := s.Attr("data-lazy-src"); ok {
@@ -164,6 +177,17 @@ func GetPics(archive uint64) (rawhtml string, urls []string, err error) {
 		}
 	})
 	return
+}
+
+func UpdateCookie(doc *goquery.Document) {
+	val := cfbypass.GetCookieValue(
+		strings.Split(regexp.MustCompile(".{1,15}=").Split(strings.Replace(cfbypass.DecodeScript(doc), ";location.reload();", "", 1), -1)[1], "+"))
+	cookie := &http.Cookie{
+		Name:  Cookie.Name,
+		Value: val,
+	}
+	log.Print("Sucuri DDoS protection bypass: update cookie to ", cookie)
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&Cookie)), unsafe.Pointer(cookie))
 }
 
 type Downloader struct {
