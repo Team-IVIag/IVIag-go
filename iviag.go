@@ -180,8 +180,7 @@ func GetPics(archive uint64) (rawhtml string, urls []string, err error) {
 }
 
 func UpdateCookie(doc *goquery.Document) {
-	val := cfbypass.GetCookieValue(
-		strings.Split(regexp.MustCompile(".{1,15}=").Split(strings.Replace(cfbypass.DecodeScript(doc), ";location.reload();", "", 1), -1)[1], "+"))
+	val := cfbypass.GetCookieValue(cfbypass.DecodeScript(doc)[0])
 	cookie := &http.Cookie{
 		Name:  Cookie.Name,
 		Value: val,
