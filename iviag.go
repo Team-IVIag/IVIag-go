@@ -22,7 +22,7 @@ import (
 
 const (
 	MangaPrefix   = "http://marumaru.in/b/manga/"
-	ArchivePrefix = "http://www.mangaumaru.com/archives/"
+	ArchivePrefix = "http://www.shencomics.com/archives/"
 	UserAgent     = "Opera/12.02 (Android 4.1; Linux; Opera Mobi/ADR-1111101157; U; en-US) Presto/2.9.201 Version/12.02" // Opera Mobile 12.02
 )
 
