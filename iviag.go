@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/organization/cloudflare-bypass"
@@ -28,11 +27,9 @@ const (
 
 var (
 	workerID, fetchID uint32
-	Cookie            = &http.Cookie{
-		Name:  "sucuri_cloudproxy_uuid_0b08a99da",
-		Value: "",
-	}
-	Filter = regexp.MustCompile("[\\[\\]\\:\\s<>\\=\\|\\+]").ReplaceAllString
+	Cookie            = http.Cookie{}
+	CookieLock        = new(sync.RWMutex)
+	Filter            = regexp.MustCompile("[\\[\\]\\:\\s<>\\=\\|\\+]").ReplaceAllString
 )
 
 func main() {
@@ -106,14 +103,31 @@ type Archive struct {
 }
 
 func GetArchives(manga uint64) (title string, mangas []Archive, err error) {
+	req, err := http.NewRequest("GET", MangaPrefix+strconv.FormatUint(manga, 10), nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("Request creation error: %s", err.Error())
+	}
+	req.Header.Set("User-Agent", UserAgent)
+	func() {
+		CookieLock.RLock()
+		defer CookieLock.RUnlock()
+		req.AddCookie(&Cookie)
+	}()
+	resp, err := new(http.Client).Do(req)
+	if err != nil {
+		return "", nil, fmt.Errorf("HTTP request error: %s", err.Error())
+	}
+	defer resp.Body.Close()
+	buf := new(bytes.Buffer)
+	io.Copy(buf, resp.Body)
 	var doc *goquery.Document
-	doc, err = goquery.NewDocument(MangaPrefix + strconv.FormatUint(manga, 10))
+	doc, err = goquery.NewDocumentFromReader(buf)
 	if err != nil {
 		return
 	}
 	if doc.Find("title").First().Text()[:7] == "You are" {
 		UpdateCookie(doc)
-		return
+		return GetArchives(manga)
 	}
 	links := make([]Archive, 0)
 	seq := uint64(1)
@@ -152,7 +166,7 @@ func GetPics(archive uint64) (rawhtml string, urls []string, err error) {
 		return "", nil, fmt.Errorf("Request creation error: %s", err.Error())
 	}
 	req.Header.Set("User-Agent", UserAgent)
-	req.AddCookie(Cookie)
+	req.AddCookie(&Cookie)
 	resp, err := new(http.Client).Do(req)
 	if err != nil {
 		return "", nil, fmt.Errorf("HTTP request error: %s", err.Error())
@@ -168,7 +182,7 @@ func GetPics(archive uint64) (rawhtml string, urls []string, err error) {
 	}
 	if doc.Find("title").First().Text()[:7] == "You are" {
 		UpdateCookie(doc)
-		return
+		return GetPics(archive)
 	}
 	urls = make([]string, 0)
 	doc.Find("div .entry-content").Find("img").Each(func(i int, s *goquery.Selection) {
@@ -180,13 +194,15 @@ func GetPics(archive uint64) (rawhtml string, urls []string, err error) {
 }
 
 func UpdateCookie(doc *goquery.Document) {
-	val := cfbypass.GetCookieValue(cfbypass.DecodeScript(doc)[0])
-	cookie := &http.Cookie{
-		Name:  Cookie.Name,
-		Value: val,
-	}
-	log.Print("Sucuri DDoS protection bypass: update cookie to ", cookie)
-	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&Cookie)), unsafe.Pointer(cookie))
+	s := cfbypass.DecodeScript(doc)
+	key := cfbypass.GetCookieKey(s[1])
+	val := cfbypass.GetCookieValue(s[0])
+	c := http.Cookie{}
+	c.Name = key
+	c.Value = val
+	CookieLock.Lock()
+	defer CookieLock.Unlock()
+	Cookie = c
 }
 
 type Downloader struct {
