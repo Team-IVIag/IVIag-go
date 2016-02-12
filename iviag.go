@@ -29,6 +29,8 @@ var (
 	workerID, fetchID uint32
 	Cookie            = http.Cookie{}
 	CookieLock        = new(sync.RWMutex)
+	Parsed            = make(map[uint64]bool)
+	DupLock           = new(sync.Mutex)
 	Filter            = regexp.MustCompile("[\\[\\]\\:\\s<>\\=\\|\\+]").ReplaceAllString
 )
 
@@ -242,10 +244,17 @@ func (d *Downloader) Start(mangas <-chan uint64, wg *sync.WaitGroup) {
 		}
 		os.MkdirAll(title, os.ModeDir)
 		d.Wait.Add(len(links))
-		for _, link := range links {
-			link.Wait = d.Wait
-			d.target <- link
-		}
+		func() {
+			DupLock.Lock()
+			defer DupLock.Unlock()
+			for _, link := range links {
+				if _, ok := Parsed[link.ID]; !ok {
+					link.Wait = d.Wait
+					d.target <- link
+					Parsed[link.ID] = true
+				}
+			}
+		}()
 	}
 	d.Wait.Wait()
 	wg.Done()
