@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/organization/cloudflare-bypass"
@@ -35,15 +36,40 @@ var (
 	Filter            = regexp.MustCompile("[\\[\\]\\:\\s<>\\=\\|\\+]").ReplaceAllString
 )
 
+// MultiWriter is UNSAFE write multiflexer for io.Writer interface.
+type MultiWriter struct {
+	Writers []io.Writer
+}
+
+// Write implements io.Writer interface.
+func (m MultiWriter) Write(b []byte) (n int, err error) {
+	for _, w := range m.Writers {
+		n, err = w.Write(b)
+	}
+	return
+}
+
 func main() {
-	maxPics := flag.Int64("max", -1, "다운로드할 최대 이미지 수")
-	downloaders := flag.Uint64("dl", 1, "한 번에 다운로드할 만화 수")
-	workers := flag.Uint64("worker", 3, "한 만화당 동시에 다운로드할 회차 수")
-	fetchers := flag.Uint64("fetch", 3, "회차당 동시에 다운로드할 이미지 수")
+	maxPics := flag.Int64("max", -1, "Max count of pics to download (not implemented)")
+	downloaders := flag.Uint64("dl", 1, "Number of simultaneous manga downloader")
+	workers := flag.Uint64("worker", 3, "Number of simultaneous archive worker per downloader")
+	fetchers := flag.Uint64("fetch", 4, "Number of simultaneous image fetcher per worker")
 	flag.Parse()
 	mangas := flag.Args()
 
 	targets := make(chan uint64, len(mangas))
+
+	logfile, err := os.Create("log.txt")
+	if err != nil {
+		return
+	}
+	defer logfile.Close()
+	logfile.WriteString(fmt.Sprintf(`======================================================
+Fetch started at %v
+======================================================
+`, time.Now()))
+	log.SetOutput(MultiWriter{[]io.Writer{os.Stdout, logfile}})
+
 	for _, manga := range mangas {
 		m, err := strconv.ParseUint(manga, 10, 64)
 		if err != nil {
