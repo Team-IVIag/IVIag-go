@@ -305,7 +305,6 @@ func (d *Downloader) Start(mangas <-chan uint64, wg *sync.WaitGroup) {
 			continue
 		}
 		os.MkdirAll(title, os.ModeDir)
-		d.Wait.Add(len(links))
 		func() {
 			DupLock.Lock()
 			defer DupLock.Unlock()
@@ -313,12 +312,14 @@ func (d *Downloader) Start(mangas <-chan uint64, wg *sync.WaitGroup) {
 				if _, ok := Parsed[link.ID]; !ok {
 					link.Wait = d.Wait
 					d.target <- link
+					d.Wait.Add(1)
 					Parsed[link.ID] = true
 				}
 			}
 		}()
 	}
 	d.Wait.Wait()
+	log.Println("Download done. exiting")
 	wg.Done()
 }
 
@@ -370,6 +371,7 @@ func (w Worker) Watch() {
 		raw, imgs, err := GetPics(target.ID)
 		if err != nil {
 			log.Printf("Archive parse error: %s", err.Error())
+			target.Wait.Done()
 			continue
 		}
 		log.Printf("Archive parse done for: %d(%s)", target.ID, target.Subject)
