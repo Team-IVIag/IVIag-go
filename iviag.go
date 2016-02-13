@@ -168,6 +168,10 @@ func GetArchives(manga uint64) (title string, mangas []Archive, err error) {
 			title = "Untitled"
 		}
 	}
+	needFix := make(map[uint64]*struct {
+		needs []int
+		fix   int
+	})
 	doc.Find("div .content").Children().Find("a").Each(func(i int, s *goquery.Selection) {
 		if l, ok := s.Attr("href"); ok && strings.Index(l, ArchivePrefix) != -1 {
 			if link, err := strconv.ParseUint(l[strings.Index(l, ArchivePrefix)+len(ArchivePrefix):], 10, 64); err == nil {
@@ -179,6 +183,21 @@ func GetArchives(manga uint64) (title string, mangas []Archive, err error) {
 						}
 					}
 					sub = "Untitled"
+					if _, ok := needFix[link]; ok {
+						needFix[link].needs = append(needFix[link].needs, len(links))
+					} else {
+						needFix[link] = &struct {
+							needs []int
+							fix   int
+						}{
+							[]int{len(links)},
+							-1,
+						}
+					}
+				} else {
+					if index, ok := needFix[link]; ok && index.fix < 0 {
+						needFix[link].fix = len(links)
+					}
 				}
 				links = append(links, Archive{
 					ID:      link,
@@ -190,6 +209,13 @@ func GetArchives(manga uint64) (title string, mangas []Archive, err error) {
 			}
 		}
 	})
+	for _, st := range needFix {
+		if st.fix > 0 {
+			for _, need := range st.needs {
+				links[need].Subject = links[st.fix].Subject
+			}
+		}
+	}
 	return title, links, nil
 }
 
