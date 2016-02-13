@@ -20,9 +20,10 @@ import (
 )
 
 const (
-	MangaPrefix   = "http://marumaru.in/b/manga/"
-	ArchivePrefix = "http://www.shencomics.com/archives/"
-	UserAgent     = "Opera/12.02 (Android 4.1; Linux; Opera Mobi/ADR-1111101157; U; en-US) Presto/2.9.201 Version/12.02" // Opera Mobile 12.02
+	MangaPrefix          = "http://marumaru.in/b/manga/"
+	ArchivePrefix        = "http://www.shencomics.com/archives/"
+	UserAgent            = "Opera/12.02 (Android 4.1; Linux; Opera Mobi/ADR-1111101157; U; en-US) Presto/2.9.201 Version/12.02" // Opera Mobile 12.02
+	MaxTries      uint32 = 5
 )
 
 var (
@@ -370,11 +371,20 @@ func (f Fetcher) fetch() {
 				return
 			}
 			defer file.Close()
-			s, err := Get(req.URL)
-			if err != nil {
-				f.Result <- FetchResult{
-					Ok:          false,
-					Description: err.Error(),
+			var s string
+			for tries := uint32(0); ; tries++ {
+				s, err = Get(req.URL)
+				if err != nil {
+					if tries >= MaxTries {
+						f.Result <- FetchResult{
+							Ok:          false,
+							Description: err.Error(),
+						}
+					} else {
+						log.Printf("Fetch error: %s (retry count %d)", err.Error(), tries)
+					}
+				} else {
+					break
 				}
 			}
 			_, err = file.WriteString(s)
