@@ -48,6 +48,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		log.Println("Adding download target:", m)
 		targets <- m
 	}
 
@@ -205,6 +206,7 @@ func UpdateCookie(doc *goquery.Document) {
 	CookieLock.Lock()
 	defer CookieLock.Unlock()
 	Cookie = c
+	log.Printf("Sucuri proxy key update: %s=%s", c.Name, c.Value)
 }
 
 type Downloader struct {
@@ -297,27 +299,38 @@ func NewWorker(fetchers uint64, tc <-chan Archive, rc chan<- Status) *Worker {
 
 func (w Worker) Watch() {
 	for target := range w.Targets {
-		dir := target.Title + "/" + strconv.FormatUint(target.Seq, 10) + "_" + Filter(target.Subject, "_")
+		dir := target.Title + "/" + Filter(target.Subject, "_")
 		os.MkdirAll(dir, os.ModeDir)
-		log.Printf("Parsing archive: %s%d", ArchivePrefix, target.ID)
+		if _, err := os.Stat(dir + "/raw.html"); err == nil {
+			log.Printf("Archive %d(%s) already exists in local: Skipping.", target.ID, target.Subject)
+			target.Wait.Done()
+			continue
+		}
+		log.Printf("Parsing archive: %d(%s)", target.ID, target.Subject)
 		raw, imgs, err := GetPics(target.ID)
 		if err != nil {
 			log.Printf("Archive parse error: %s", err.Error())
+			continue
 		}
-		log.Printf("Archive parse done for: %s%d", ArchivePrefix, target.ID)
-		func() {
-			file, err := os.Create(dir + "/raw.html")
+		log.Printf("Archive parse done for: %d(%s)", target.ID, target.Subject)
+		var file *os.File
+		afterFetch := func() func() {
+			file, err = os.Create(dir + "/raw.html")
 			if err == nil {
-				defer file.Close()
+				return func() {
+					defer file.Close()
+					file.WriteString(raw)
+				}
+			} else {
+				return func() {}
 			}
-			file.WriteString(raw)
 		}()
 		wg := new(sync.WaitGroup)
 		wg.Add(len(imgs))
 		for i, img := range imgs {
 			w.FRequest <- FetchRequest{
 				URL:     img,
-				FileDir: target.Title + "/" + strconv.FormatUint(target.Seq, 10) + "_" + Filter(target.Subject+"/"+strconv.Itoa(i)+".jpg", "_"),
+				FileDir: target.Title + "/" + Filter(target.Subject+"/"+strconv.Itoa(i)+".jpg", "_"),
 				Wait:    wg,
 			}
 		}
@@ -328,6 +341,7 @@ func (w Worker) Watch() {
 			files = make([]string, 0)
 		}
 		target.Wait.Done()
+		afterFetch()
 		log.Printf("Archive fetch complete for %d(%s). Pics count: %d", target.ID, target.Subject, len(files))
 	}
 }
