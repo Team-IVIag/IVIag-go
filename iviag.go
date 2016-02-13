@@ -33,7 +33,10 @@ var (
 	CookieLock        = new(sync.RWMutex)
 	Parsed            = make(map[uint64]bool)
 	DupLock           = new(sync.Mutex)
-	Filter            = regexp.MustCompile("[\\[\\]\\:\\s<>\\=\\|\\+]").ReplaceAllString
+	Filter            = regexp.MustCompile("[\\[\\]\\:\\s<>\\=\\|\\+]+").ReplaceAllString
+	RemoveWhites      = func(s string) string {
+		return regexp.MustCompile("^[\xc2\xa0 \\t]+").ReplaceAllString(s, "")
+	}
 )
 
 // MultiWriter is UNSAFE write multiflexer for io.Writer interface.
@@ -175,7 +178,7 @@ func GetArchives(manga uint64) (title string, mangas []Archive, err error) {
 	doc.Find("div .content").Children().Find("a").Each(func(i int, s *goquery.Selection) {
 		if l, ok := s.Attr("href"); ok && strings.Index(l, ArchivePrefix) != -1 {
 			if link, err := strconv.ParseUint(l[strings.Index(l, ArchivePrefix)+len(ArchivePrefix):], 10, 64); err == nil {
-				sub := s.Text()
+				sub := RemoveWhites(s.Text())
 				if sub == "" {
 					for _, l := range links {
 						if l.ID == link {
