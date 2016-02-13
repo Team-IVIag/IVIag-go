@@ -170,7 +170,11 @@ func GetPics(archive uint64) (rawhtml string, urls []string, err error) {
 		return "", nil, fmt.Errorf("Request creation error: %s", err.Error())
 	}
 	req.Header.Set("User-Agent", UserAgent)
-	req.AddCookie(&Cookie)
+	func() {
+		CookieLock.RLock()
+		defer CookieLock.RUnlock()
+		req.AddCookie(&Cookie)
+	}()
 	resp, err := new(http.Client).Do(req)
 	if err != nil {
 		return "", nil, fmt.Errorf("HTTP request error: %s", err.Error())
