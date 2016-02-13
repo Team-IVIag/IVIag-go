@@ -163,7 +163,10 @@ func GetArchives(manga uint64) (title string, mangas []Archive, err error) {
 	seq := uint64(1)
 	title = Filter(doc.Find("div .subject").Find("h1").Text(), "_")
 	if title == "" {
-		title = "Untitled"
+		title = Filter(strings.Replace(doc.Find("title").First().Text(), " | SHENCOMICS", "", 1), "_")
+		if title == "" {
+			title = "Untitled"
+		}
 	}
 	doc.Find("div .content").Children().Find("a").Each(func(i int, s *goquery.Selection) {
 		if l, ok := s.Attr("href"); ok && strings.Index(l, ArchivePrefix) != -1 {
