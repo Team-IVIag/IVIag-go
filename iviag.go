@@ -59,7 +59,7 @@ func main() {
 
 	targets := make(chan uint64, len(mangas))
 
-	logfile, err := os.Create("log.txt")
+	logfile, err := os.OpenFile("log.txt", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0666)
 	if err != nil {
 		return
 	}
@@ -67,7 +67,8 @@ func main() {
 	logfile.WriteString(fmt.Sprintf(`======================================================
 Fetch started at %v
 ======================================================
-`, time.Now()))
+Targets supplied: %v
+`, time.Now(), mangas))
 	log.SetOutput(MultiWriter{[]io.Writer{os.Stdout, logfile}})
 
 	for _, manga := range mangas {
@@ -202,7 +203,7 @@ func GetArchives(manga uint64) (title string, mangas []Archive, err error) {
 				links = append(links, Archive{
 					ID:      link,
 					Seq:     seq,
-					Title:   title,
+					Title:   fmt.Sprintf("%s(%d)", title, manga),
 					Subject: sub,
 				})
 				seq++
@@ -299,12 +300,11 @@ func (d *Downloader) Init(workers, fetchers uint64, maxPics int64) {
 func (d *Downloader) Start(mangas <-chan uint64, wg *sync.WaitGroup) {
 	for manga := range mangas {
 		log.Printf("Parsing archive list: %s%d", MangaPrefix, manga)
-		title, links, err := GetArchives(manga)
+		_, links, err := GetArchives(manga)
 		if err != nil {
 			log.Printf("Archive list parse error: %s", err.Error())
 			continue
 		}
-		os.MkdirAll(title, os.ModeDir)
 		func() {
 			DupLock.Lock()
 			defer DupLock.Unlock()
