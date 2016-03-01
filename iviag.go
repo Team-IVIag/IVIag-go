@@ -36,19 +36,6 @@ var (
 	Filter            = regexp.MustCompile("[\\[\\]\\:\\s<>\\=\\|\\+]+").ReplaceAllString
 )
 
-// MultiWriter is UNSAFE write multiflexer for io.Writer interface.
-type MultiWriter struct {
-	Writers []io.Writer
-}
-
-// Write implements io.Writer interface.
-func (m MultiWriter) Write(b []byte) (n int, err error) {
-	for _, w := range m.Writers {
-		n, err = w.Write(b)
-	}
-	return
-}
-
 func main() {
 	maxPics := flag.Int64("max", -1, "Max count of pics to download (not implemented)")
 	downloaders := flag.Uint64("dl", 1, "Number of simultaneous manga downloader")
@@ -69,7 +56,7 @@ Fetch started at %v
 ======================================================
 Targets supplied: %v
 `, time.Now(), mangas))
-	log.SetOutput(MultiWriter{[]io.Writer{os.Stdout, logfile}})
+	log.SetOutput(io.MultiWriter(os.Stdout, logfile))
 
 	for _, manga := range mangas {
 		m, err := strconv.ParseUint(manga, 10, 64)
